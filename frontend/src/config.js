@@ -1,9 +1,7 @@
 const config = {
-  // Development
-  // API_URL: 'http://localhost:8000',
-  
-  // Production (replace with your Render URL once deployed)
-  API_URL: 'https://your-app-name.onrender.com',
+  API_URL: process.env.NODE_ENV === 'production' 
+    ? 'https://pdf-label-converter.onrender.com'
+    : 'http://localhost:8000'
 };
 
 export default config;

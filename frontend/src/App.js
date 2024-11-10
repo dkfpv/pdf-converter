@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { Upload, AlertCircle, FileIcon, Check, Loader2 } from 'lucide-react';
+import config from './config';
 
 const App = () => {
   const [isDragging, setIsDragging] = useState(false);
@@ -42,7 +43,7 @@ const App = () => {
     formData.append('margin_mm', margin.toString());
 
     try {
-      const response = await fetch('http://localhost:8000/api/convert', {
+      const response = await fetch(`${config.API_URL}/api/convert`, {  // Updated URL
         method: 'POST',
         body: formData,
       });
