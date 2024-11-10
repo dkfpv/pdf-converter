@@ -4,11 +4,16 @@ FROM python:3.9-slim
 # Set working directory
 WORKDIR /app
 
+# Install system dependencies required for PyMuPDF
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy backend files
 COPY backend/requirements.txt .
 COPY backend/main.py .
 
-# Install dependencies
+# Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Create storage directories
