@@ -22,10 +22,11 @@ RUN chmod -R 777 storage
 
 # Environment variables
 ENV PORT=8000
-ENV RAILWAY=true
 
-# Expose the port
-EXPOSE $PORT
+# Create start script
+RUN echo '#!/bin/bash\n\
+uvicorn main:app --host 0.0.0.0 --port "${PORT:-8000}"' > start.sh && \
+    chmod +x start.sh
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]
+CMD ["./start.sh"]
