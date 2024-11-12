@@ -4,7 +4,7 @@ FROM python:3.9-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies required for PyMuPDF
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
@@ -20,11 +20,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN mkdir -p storage/uploads storage/outputs storage/temp
 RUN chmod -R 777 storage
 
-# Set environment variables
+# Environment variables
 ENV PORT=8000
+ENV RAILWAY=true
 
 # Expose the port
-EXPOSE 8000
+EXPOSE $PORT
 
 # Command to run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "$PORT"]

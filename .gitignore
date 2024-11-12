@@ -24,3 +24,6 @@ Thumbs.db
 
 # Storage
 /backend/storage/
+
+# Local Netlify folder
+.netlify

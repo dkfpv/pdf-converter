@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import uuid
 import logging
+from datetime import datetime, timedelta
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -17,27 +18,53 @@ app = FastAPI(title="PDF Label Converter")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend URL
+    allow_origins=[
+        "http://localhost:3000",  
+        "https://label-pdf-crop.netlify.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Create storage directories
-STORAGE_DIR = Path("storage")
+# PythonAnywhere specific paths
+USERNAME = "your_pythonanywhere_username"  # Replace with your username
+BASE_DIR = Path(f"/home/{USERNAME}/pdf_converter")
+STORAGE_DIR = BASE_DIR / "storage"
 UPLOAD_DIR = STORAGE_DIR / "uploads"
 OUTPUT_DIR = STORAGE_DIR / "outputs"
 TEMP_DIR = STORAGE_DIR / "temp"
 
-for directory in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR]:
+# Create storage directories with full permissions
+for directory in [STORAGE_DIR, UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
+    # Make directory writable
+    os.chmod(directory, 0o777)
+
+def cleanup_old_files():
+    """Remove files older than 5 minutes"""
+    try:
+        threshold = datetime.now() - timedelta(minutes=5)
+        
+        for directory in [UPLOAD_DIR, OUTPUT_DIR, TEMP_DIR]:
+            for file_path in directory.glob("*"):
+                if datetime.fromtimestamp(file_path.stat().st_mtime) < threshold:
+                    try:
+                        file_path.unlink()
+                        logger.info(f"Cleaned up old file: {file_path}")
+                    except Exception as e:
+                        logger.error(f"Error deleting file {file_path}: {e}")
+    except Exception as e:
+        logger.error(f"Error during cleanup: {e}")
 
 @app.get("/")
 async def read_root():
+    cleanup_old_files()  # Cleanup on each request
     return {"status": "online", "message": "PDF Label Converter API"}
 
 @app.get("/health")
 async def health_check():
+    cleanup_old_files()
     return {
         "status": "healthy",
         "storage": {
@@ -56,14 +83,19 @@ async def convert_pdf(
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(400, "File must be a PDF")
         
-        # Generate unique file paths
-        input_path = UPLOAD_DIR / f"{uuid.uuid4()}_input.pdf"
-        output_path = OUTPUT_DIR / f"{uuid.uuid4()}_output.pdf"
+        # Generate unique file paths with timestamps
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        input_path = UPLOAD_DIR / f"{timestamp}_{uuid.uuid4()}_input.pdf"
+        output_path = OUTPUT_DIR / f"{timestamp}_{uuid.uuid4()}_output.pdf"
         
         # Save uploaded file
-        with open(input_path, "wb") as buffer:
-            content = await file.read()
-            buffer.write(content)
+        try:
+            with open(input_path, "wb") as buffer:
+                content = await file.read()
+                buffer.write(content)
+        except Exception as e:
+            logger.error(f"Error saving uploaded file: {e}")
+            raise HTTPException(500, "Error saving uploaded file")
         
         try:
             # Convert PDF
@@ -99,28 +131,29 @@ async def convert_pdf(
             doc.close()
             src.close()
             
-            # Return the processed file
+            # Ensure file exists and is readable
+            if not output_path.exists():
+                raise HTTPException(500, "Failed to generate output file")
+            
+            # Set file permissions
+            os.chmod(output_path, 0o644)
+            
             return FileResponse(
                 output_path,
                 media_type='application/pdf',
-                filename=f"{Path(file.filename).stem}_print.pdf"
+                filename=f"{Path(file.filename).stem}_print.pdf",
+                background=cleanup_old_files  # Clean up after sending
             )
             
         except Exception as e:
             logger.error(f"Error processing PDF: {e}")
             raise HTTPException(500, f"Error processing PDF: {str(e)}")
             
-        finally:
-            # Cleanup
-            if input_path.exists():
-                input_path.unlink()
-            if output_path.exists():
-                output_path.unlink()
-            
     except Exception as e:
         logger.error(f"Error handling upload: {e}")
         raise HTTPException(500, f"Error handling upload: {str(e)}")
 
+# Only used for local development
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
