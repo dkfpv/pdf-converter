@@ -118,6 +118,7 @@ async def health_check():
         raise HTTPException(500, "Health check failed")
 
 @app.post("/api/convert")
+@app.post("//api/convert")  # Handle double slash case
 async def convert_pdf(
     file: UploadFile,
     margin_mm: float = -24

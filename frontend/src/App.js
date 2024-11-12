@@ -15,10 +15,19 @@ const App = () => {
     setErrorMessage('');
 
     const droppedFile = e.dataTransfer?.files[0];
-    if (!droppedFile) return;
+    if (!droppedFile) {
+      setErrorMessage('No file dropped');
+      return;
+    }
 
     if (!droppedFile.name.toLowerCase().endsWith('.pdf')) {
       setErrorMessage('Please drop a PDF file');
+      return;
+    }
+
+    // Check file size (max 10MB)
+    if (droppedFile.size > 10 * 1024 * 1024) {
+      setErrorMessage('File size must be less than 10MB');
       return;
     }
 
@@ -28,6 +37,17 @@ const App = () => {
   const handleFileInput = useCallback((e) => {
     const selectedFile = e.target.files?.[0];
     if (!selectedFile) return;
+
+    if (!selectedFile.name.toLowerCase().endsWith('.pdf')) {
+      setErrorMessage('Please select a PDF file');
+      return;
+    }
+
+    if (selectedFile.size > 10 * 1024 * 1024) {
+      setErrorMessage('File size must be less than 10MB');
+      return;
+    }
+
     setFile(selectedFile);
     setErrorMessage('');
   }, []);
@@ -43,28 +63,63 @@ const App = () => {
     formData.append('margin_mm', margin.toString());
 
     try {
-      const response = await fetch(`${config.API_URL}/api/convert`, {  // Updated URL
+      // Ensure clean URL construction
+      const baseUrl = config.API_URL.replace(/\/+$/, '');
+      const response = await fetch(`${baseUrl}/api/convert`, {
         method: 'POST',
         body: formData,
       });
 
-      if (!response.ok) throw new Error('Conversion failed');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || 'Conversion failed');
+      }
+
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/pdf')) {
+        throw new Error('Invalid response format');
+      }
 
       const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error('Empty response received');
+      }
+
+      // Create download link
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `${file.name.replace('.pdf', '')}_print_${timestamp}.pdf`;
+
       a.href = url;
-      a.download = file.name.replace('.pdf', '_print.pdf');
+      a.download = fileName;
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
+
+      // Cleanup
+      setTimeout(() => {
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+      }, 100);
+
       setFile(null);
 
     } catch (error) {
-      setErrorMessage('Error processing PDF. Please try again.');
+      console.error('Conversion error:', error);
+      setErrorMessage(
+        error.message === 'Failed to fetch'
+          ? 'Unable to connect to the server. Please try again.'
+          : error.message || 'Error processing PDF. Please try again.'
+      );
     } finally {
       setIsProcessing(false);
+    }
+  };
+
+  const handleMarginChange = (e) => {
+    const value = Number(e.target.value);
+    if (value >= -100 && value <= 100) { // Add reasonable limits
+      setMargin(value);
     }
   };
 
@@ -81,9 +136,14 @@ const App = () => {
             <input
               type="number"
               value={margin}
-              onChange={(e) => setMargin(Number(e.target.value))}
+              onChange={handleMarginChange}
+              min="-100"
+              max="100"
               className="w-32 px-4 py-2 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
             />
+            <p className="mt-2 text-sm text-gray-500">
+              Negative values move right, positive values move left
+            </p>
           </div>
 
           <div
@@ -94,7 +154,7 @@ const App = () => {
               relative border-2 border-dashed rounded-xl p-8 text-center
               transition-colors duration-200 ease-in-out
               ${isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300'}
-              ${isProcessing ? 'opacity-50' : 'hover:border-blue-500 hover:bg-blue-50'}
+              ${isProcessing ? 'opacity-50 cursor-not-allowed' : 'hover:border-blue-500 hover:bg-blue-50 cursor-pointer'}
             `}
           >
             <input
@@ -105,7 +165,7 @@ const App = () => {
               id="fileInput"
               disabled={isProcessing}
             />
-            <label htmlFor="fileInput" className="cursor-pointer">
+            <label htmlFor="fileInput" className={`cursor-${isProcessing ? 'not-allowed' : 'pointer'}`}>
               <div className="space-y-4">
                 {file ? (
                   <div className="flex items-center justify-center space-x-3">
@@ -120,6 +180,9 @@ const App = () => {
                     </p>
                     <p className="text-sm text-gray-500">
                       or click to select a file
+                    </p>
+                    <p className="text-xs text-gray-400 mt-2">
+                      Maximum file size: 10MB
                     </p>
                   </>
                 )}
@@ -141,9 +204,10 @@ const App = () => {
               className={`
                 mt-6 w-full py-3 px-4 rounded-lg text-white font-medium
                 flex items-center justify-center space-x-2
+                transition-colors duration-200
                 ${isProcessing
                   ? 'bg-blue-400 cursor-not-allowed'
-                  : 'bg-blue-500 hover:bg-blue-600'}
+                  : 'bg-blue-500 hover:bg-blue-600 active:bg-blue-700'}
               `}
             >
               {isProcessing ? (
