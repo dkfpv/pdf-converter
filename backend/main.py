@@ -1,6 +1,6 @@
 from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 import fitz  # PyMuPDF
 import os
 from pathlib import Path
@@ -38,27 +38,54 @@ OUTPUT_DIR = STORAGE_DIR / "outputs"
 # Setup storage directories
 def setup_storage():
     """Setup storage directories with proper permissions"""
-    for directory in [STORAGE_DIR, UPLOAD_DIR, OUTPUT_DIR]:
-        directory.mkdir(parents=True, exist_ok=True)
-        os.chmod(directory, 0o777)
+    try:
+        logger.info("Setting up storage directories")
+        for directory in [STORAGE_DIR, UPLOAD_DIR, OUTPUT_DIR]:
+            directory.mkdir(parents=True, exist_ok=True)
+            os.chmod(directory, 0o777)
+            logger.info(f"Created and set permissions for directory: {directory}")
+    except Exception as e:
+        logger.error(f"Failed to setup storage directories: {e}")
+        raise
 
 setup_storage()
+
+# Root endpoint
+@app.get("/")
+async def read_root():
+    return {"status": "online", "message": "PDF Label Converter API"}
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    try:
+        storage_info = {
+            "uploads": len(list(UPLOAD_DIR.glob("*"))),
+            "outputs": len(list(OUTPUT_DIR.glob("*"))),
+        }
+        return {
+            "status": "healthy",
+            "storage": storage_info,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(500, "Health check failed")
 
 @app.post("/api/convert")
 @app.post("//api/convert")  # Handle double slash case
 async def convert_pdf(file: UploadFile, margin_mm: float = -24):
     input_path = None
     output_path = None
-    
+
     try:
         logger.info(f"Starting conversion for file: {file.filename}")
-        logger.info(f"Current working directory: {os.getcwd()}")
         
-        # Validate input
+        # Validate input file type
         if not file.filename.lower().endswith('.pdf'):
             raise HTTPException(400, "File must be a PDF")
         
-        # Generate file paths
+        # Generate unique file paths
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         input_path = UPLOAD_DIR / f"{timestamp}_{uuid.uuid4()}_input.pdf"
         output_path = OUTPUT_DIR / f"{timestamp}_{uuid.uuid4()}_output.pdf"
@@ -71,17 +98,21 @@ async def convert_pdf(file: UploadFile, margin_mm: float = -24):
         logger.info(f"Read {len(content)} bytes from uploaded file")
         input_path.write_bytes(content)
         logger.info("File saved successfully")
-        
-        # Process PDF
+
+        # Open and process PDF
         logger.info("Opening source PDF")
-        src = fitz.open(str(input_path))
-        logger.info(f"Source PDF opened, pages: {len(src)}")
-        
+        try:
+            src = fitz.open(str(input_path))
+            logger.info(f"Source PDF opened, pages: {len(src)}")
+        except Exception as e:
+            logger.error(f"Failed to open input PDF: {e}")
+            raise HTTPException(500, "Failed to open PDF file")
+
         doc = fitz.open()
         target_width = 4 * 72
         target_height = 6 * 72
         margin_points = margin_mm * 2.83465
-        
+
         for page_num in range(len(src)):
             logger.info(f"Processing page {page_num + 1}/{len(src)}")
             page = src[page_num]
@@ -93,27 +124,33 @@ async def convert_pdf(file: UploadFile, margin_mm: float = -24):
             target_rect = fitz.Rect(0, 0, target_width, target_height)
             new_page.show_pdf_page(target_rect, src, page_num, clip=src_rect)
             
-            logger.info(f"Page {page_num + 1} processed")
+            logger.info(f"Page {page_num + 1} processed successfully")
         
-        logger.info(f"Saving to: {output_path}")
-        doc.save(str(output_path))
-        doc.close()
-        src.close()
+        logger.info(f"Saving to output path: {output_path}")
+        try:
+            doc.save(str(output_path))
+            logger.info("Output PDF saved successfully")
+        except Exception as e:
+            logger.error(f"Failed to save output PDF: {e}")
+            raise HTTPException(500, "Failed to save processed PDF")
+        finally:
+            doc.close()
+            src.close()
         
         # Clean up input file immediately
         if input_path.exists():
             input_path.unlink()
             logger.info(f"Cleaned up input file: {input_path}")
         
-        # Verify output file
+        # Verify output file existence
         if not output_path.exists():
             raise Exception(f"Output file was not created at {output_path}")
         
-        # Set permissions but keep file
+        # Set permissions for output file
         os.chmod(output_path, 0o644)
         logger.info("Set output file permissions")
-        
-        # Schedule cleanup for after sending file
+
+        # Background cleanup function after response
         def cleanup_output():
             try:
                 if output_path.exists():
@@ -122,29 +159,31 @@ async def convert_pdf(file: UploadFile, margin_mm: float = -24):
             except Exception as e:
                 logger.error(f"Error cleaning up output file: {e}")
         
-        # Use background task for cleanup after response is sent
+        # Send response and schedule cleanup
         return FileResponse(
             str(output_path),
             media_type='application/pdf',
             filename=f"{Path(file.filename).stem}_print.pdf",
-            background=cleanup_output  # This runs after the file is sent
+            background=cleanup_output  # Cleanup after file is sent
         )
         
     except Exception as e:
         logger.error(f"Error processing PDF: {e}")
         logger.error(traceback.format_exc())
         
-        # Clean up files in case of error
+        # Cleanup in case of error
         try:
             if input_path and input_path.exists():
                 input_path.unlink()
+                logger.info(f"Cleaned up input file on error: {input_path}")
             if output_path and output_path.exists():
                 output_path.unlink()
+                logger.info(f"Cleaned up output file on error: {output_path}")
         except Exception as cleanup_error:
-            logger.error(f"Error during cleanup: {cleanup_error}")
+            logger.error(f"Error during cleanup on failure: {cleanup_error}")
         
         raise HTTPException(500, str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8080)  # Adjusted port to 8080 as commonly used in containers
